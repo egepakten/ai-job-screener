@@ -4,12 +4,14 @@ import LoadingMessage from "../components/LoadingMessage";
 import JobTable from "../components/JobTable";
 import FullscreenTable from "../components/FullscreenTable";
 import ThemeToggle from "../components/ThemeToggle";
-import { chatAPI, Job } from "../services/api";
+import { chatAPI, Job, ParsedQuery } from "../services/api";
 import { Message } from "../types";
 import { useTheme } from "../contexts/ThemeContext";
 
 interface MessageWithJobs extends Message {
   jobs?: Job[];
+  totalMatches?: number; // ✅ NEW: Total match count
+  parsedQuery?: ParsedQuery; // ✅ NEW: Agent's parsed query
 }
 
 const Chat: React.FC = () => {
@@ -42,7 +44,7 @@ const Chat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Call API
+      // ✅ Call NEW agent-chat API
       const response = await chatAPI.sendMessage(content, {
         sessionId: sessionId.current,
       });
@@ -55,6 +57,8 @@ const Chat: React.FC = () => {
         timestamp: new Date(),
         jobs:
           response.jobs && response.jobs.length > 0 ? response.jobs : undefined,
+        totalMatches: response.total_matches, // ✅ NEW: Store total count
+        parsedQuery: response.parsed_query, // ✅ NEW: Store parsed query
       };
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
@@ -93,6 +97,7 @@ const Chat: React.FC = () => {
         const lastMessage = newMessages[newMessages.length - 1];
         if (lastMessage.role === "assistant") {
           lastMessage.jobs = jobs;
+          lastMessage.totalMatches = jobs.length;
         }
       }
       return newMessages;
@@ -181,7 +186,7 @@ const Chat: React.FC = () => {
               }`}
             >
               <p className="font-semibold">Job Assistant AI</p>
-              <p className="text-xs mt-1">Powered by GPT-4</p>
+              <p className="text-xs mt-1">Powered by Agentic RAG + GPT-4</p>
             </div>
           </div>
         </div>
@@ -202,19 +207,29 @@ const Chat: React.FC = () => {
                       theme === "light" ? "text-gray-900" : "text-white"
                     }`}
                   >
-                    Job Assistant AI
+                    🤖 Agentic Job Search
                   </h1>
                   <p
-                    className={`text-lg mb-8 ${
+                    className={`text-lg mb-2 ${
                       theme === "light" ? "text-gray-700" : "text-gray-300"
                     }`}
                   >
-                    Ask me anything about the available job positions
+                    Intelligent multi-step job filtering powered by AI
+                  </p>
+                  <p
+                    className={`text-sm mb-8 ${
+                      theme === "light" ? "text-gray-600" : "text-gray-400"
+                    }`}
+                  >
+                    Try complex queries like "Python jobs in London over £60k
+                    with visa"
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
                     <button
                       onClick={() =>
-                        handleSendMessage("What job positions are available?")
+                        handleSendMessage(
+                          "Find Python jobs in London over £60000"
+                        )
                       }
                       className={`rounded-lg p-4 text-left transition-colors duration-200 ${
                         theme === "light"
@@ -222,18 +237,41 @@ const Chat: React.FC = () => {
                           : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700"
                       }`}
                     >
-                      <div className="font-semibold mb-1">📋 Browse Jobs</div>
+                      <div className="font-semibold mb-1">💰 Salary Filter</div>
                       <div
                         className={`text-sm ${
                           theme === "light" ? "text-gray-600" : "text-gray-400"
                         }`}
                       >
-                        What job positions are available?
+                        Find Python jobs in London over £60k
                       </div>
                     </button>
                     <button
                       onClick={() =>
-                        handleSendMessage("Show me high paying jobs")
+                        handleSendMessage(
+                          "Show remote React jobs with visa sponsorship"
+                        )
+                      }
+                      className={`rounded-lg p-4 text-left transition-colors duration-200 ${
+                        theme === "light"
+                          ? "glass-card text-gray-800 border-0"
+                          : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700"
+                      }`}
+                    >
+                      <div className="font-semibold mb-1">🛂 Multi-Filter</div>
+                      <div
+                        className={`text-sm ${
+                          theme === "light" ? "text-gray-600" : "text-gray-400"
+                        }`}
+                      >
+                        Show remote React jobs with visa
+                      </div>
+                    </button>
+                    <button
+                      onClick={() =>
+                        handleSendMessage(
+                          "Find JavaScript developer jobs in Manchester"
+                        )
                       }
                       className={`rounded-lg p-4 text-left transition-colors duration-200 ${
                         theme === "light"
@@ -242,19 +280,21 @@ const Chat: React.FC = () => {
                       }`}
                     >
                       <div className="font-semibold mb-1">
-                        💰 High Paying Jobs
+                        📍 Location Filter
                       </div>
                       <div
                         className={`text-sm ${
                           theme === "light" ? "text-gray-600" : "text-gray-400"
                         }`}
                       >
-                        Show me high paying jobs
+                        Find JavaScript jobs in Manchester
                       </div>
                     </button>
                     <button
                       onClick={() =>
-                        handleSendMessage("What are the job requirements?")
+                        handleSendMessage(
+                          "Show all available software engineer positions"
+                        )
                       }
                       className={`rounded-lg p-4 text-left transition-colors duration-200 ${
                         theme === "light"
@@ -262,32 +302,13 @@ const Chat: React.FC = () => {
                           : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700"
                       }`}
                     >
-                      <div className="font-semibold mb-1">📝 Requirements</div>
+                      <div className="font-semibold mb-1">📋 Browse All</div>
                       <div
                         className={`text-sm ${
                           theme === "light" ? "text-gray-600" : "text-gray-400"
                         }`}
                       >
-                        What are the job requirements?
-                      </div>
-                    </button>
-                    <button
-                      onClick={() =>
-                        handleSendMessage("Tell me about remote positions")
-                      }
-                      className={`rounded-lg p-4 text-left transition-colors duration-200 ${
-                        theme === "light"
-                          ? "glass-card text-gray-800 border-0"
-                          : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700"
-                      }`}
-                    >
-                      <div className="font-semibold mb-1">🏠 Remote Work</div>
-                      <div
-                        className={`text-sm ${
-                          theme === "light" ? "text-gray-600" : "text-gray-400"
-                        }`}
-                      >
-                        Tell me about remote positions
+                        Show all software engineer positions
                       </div>
                     </button>
                   </div>
@@ -364,6 +385,63 @@ const Chat: React.FC = () => {
                             </svg>
                           </div>
                           <div className="flex-1">
+                            {/* ✅ NEW: Show parsed query info */}
+                            {message.parsedQuery && (
+                              <div
+                                className={`mb-3 p-3 rounded-lg text-sm ${
+                                  theme === "light"
+                                    ? "bg-blue-50 border border-blue-200"
+                                    : "bg-blue-900 bg-opacity-20 border border-blue-700"
+                                }`}
+                              >
+                                <div className="font-semibold mb-2 flex items-center gap-2">
+                                  <svg
+                                    className="w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
+                                    />
+                                  </svg>
+                                  Agent Filters Applied:
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  {message.parsedQuery.skills.length > 0 && (
+                                    <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900 rounded text-xs">
+                                      🎯 Skills:{" "}
+                                      {message.parsedQuery.skills.join(", ")}
+                                    </span>
+                                  )}
+                                  {message.parsedQuery.salary_min && (
+                                    <span className="px-2 py-1 bg-green-100 dark:bg-green-900 rounded text-xs">
+                                      💰 Min: £
+                                      {message.parsedQuery.salary_min.toLocaleString()}
+                                    </span>
+                                  )}
+                                  {message.parsedQuery.location && (
+                                    <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900 rounded text-xs">
+                                      📍 {message.parsedQuery.location}
+                                    </span>
+                                  )}
+                                  {message.parsedQuery.visa_required && (
+                                    <span className="px-2 py-1 bg-orange-100 dark:bg-orange-900 rounded text-xs">
+                                      🛂 Visa Required
+                                    </span>
+                                  )}
+                                  {message.parsedQuery.remote && (
+                                    <span className="px-2 py-1 bg-teal-100 dark:bg-teal-900 rounded text-xs">
+                                      🏠 Remote
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
                             <p
                               className={`whitespace-pre-wrap mb-4 ${
                                 theme === "light"
@@ -373,6 +451,33 @@ const Chat: React.FC = () => {
                             >
                               {message.content}
                             </p>
+
+                            {/* ✅ NEW: Show total matches count prominently */}
+                            {message.totalMatches !== undefined &&
+                              message.totalMatches > 0 && (
+                                <div
+                                  className={`mb-3 p-2 rounded-lg inline-block ${
+                                    theme === "light"
+                                      ? "bg-green-50 text-green-700"
+                                      : "bg-green-900 bg-opacity-30 text-green-300"
+                                  }`}
+                                >
+                                  <span className="font-semibold">
+                                    📊 {message.totalMatches.toLocaleString()}{" "}
+                                    jobs found
+                                  </span>
+                                  {message.jobs &&
+                                    message.totalMatches >
+                                      message.jobs.length && (
+                                      <span className="ml-2 text-sm opacity-75">
+                                        (showing top {message.jobs.length} in
+                                        detail, all {message.totalMatches} in
+                                        table)
+                                      </span>
+                                    )}
+                                </div>
+                              )}
+
                             {message.jobs && message.jobs.length > 0 && (
                               <JobTable
                                 jobs={message.jobs}

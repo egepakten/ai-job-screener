@@ -1,4 +1,4 @@
-# main.py
+# chatgpt_clone/main.py
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from rag.retriever import load_faiss_index
@@ -89,12 +89,6 @@ async def get_jobs(
 
 @app.post("/chat")
 async def chat(request: Request):
-    """
-    ⚠️ OLD RAG ENDPOINT - Basic vector search + GPT
-    
-    This is your original implementation. Keep it for comparison!
-    Use /agent-chat for the improved Agentic RAG version.
-    """
     data = await request.json()
     user_input = data["message"]
     user_memory = data.get("user_memory", "")  # Optional user preferences/profile
@@ -106,23 +100,87 @@ async def chat(request: Request):
     # Get total number of jobs in index
     total_jobs = faiss_index.ntotal
     
-    # 🎯 Smart k selection: limit to MAX_GPT_CONTEXT_RESULTS to prevent context overflow
-    # Unless user explicitly wants all (use /jobs endpoint instead for better performance)
-    k = min(MAX_GPT_CONTEXT_RESULTS, total_jobs)
+    # 🎯 Search more results initially for better filtering (3x more than needed)
+    initial_k = min(MAX_GPT_CONTEXT_RESULTS * 3, total_jobs)
     
     # Create cache key from query for caching
     query_cache_key = hashlib.md5(f"{user_input}_{user_memory}".encode()).hexdigest()
     
     # Search FAISS index (cached implicitly by query similarity)
-    D, I = faiss_index.search(np.array([user_vector]).astype("float32"), k=k)
+    D, I = faiss_index.search(np.array([user_vector]).astype("float32"), k=initial_k)
     
-    # Get top relevant jobs
-    relevant_jobs = [metadata[i] for i in I[0] if i < len(metadata)]
+    # Get candidate jobs
+    candidate_jobs = [metadata[i] for i in I[0] if i < len(metadata)]
+    
+    # 🔍 Smart filtering based on query keywords
+    user_input_lower = user_input.lower()
+    
+    # Extract location keywords from query
+    location_keywords = []
+    uk_cities = ['manchester', 'birmingham', 'edinburgh', 'glasgow', 'bristol', 'cambridge', 
+                 'oxford', 'leeds', 'liverpool', 'sheffield', 'nottingham', 'cardiff']
+    for city in uk_cities:
+        if city in user_input_lower:
+            location_keywords.append(city)
+    
+    # Extract tech stack keywords
+    tech_keywords = []
+    common_techs = ['python', 'java', 'javascript', 'typescript', 'react', 'node', 'aws', 'kubernetes', 
+                    'docker', 'sql', 'nosql', 'mongodb', 'postgres', 'redis', 'kafka', 'scala', 'kotlin',
+                    'swift', 'go', 'rust', 'c++', 'c#', '.net', 'django', 'flask', 'spring', 'angular', 'vue']
+    for tech in common_techs:
+        if tech in user_input_lower:
+            tech_keywords.append(tech)
+    
+    # Apply smart filtering
+    filtered_jobs = []
+    for job in candidate_jobs:
+        score = 0
+        job_location = job.get('location', '').lower()
+        job_tech_stack = [t.lower() for t in job.get('tech_stack', [])]
+        job_title = job.get('title', '').lower()
+        job_company = job.get('company', '').lower()
+        
+        # Location matching (highest priority)
+        if location_keywords:
+            if any(keyword in job_location for keyword in location_keywords):
+                score += 100  # Strong match for location
+            elif 'london' in job_location and 'london' not in location_keywords:
+                score -= 50  # Penalize non-matching locations strongly
+        
+        # Tech stack matching
+        if tech_keywords:
+            matching_techs = sum(1 for tech in tech_keywords if tech in ' '.join(job_tech_stack))
+            score += matching_techs * 10
+        
+        # Title matching
+        query_words = [w for w in user_input_lower.split() if len(w) > 3]  # Skip short words
+        for word in query_words:
+            if word in job_title:
+                score += 5
+            if word in job_company:
+                score += 3
+        
+        filtered_jobs.append((score, job))
+    
+    # Sort by score (descending) and take top results
+    filtered_jobs.sort(key=lambda x: x[0], reverse=True)
+    
+    # Only return jobs with positive scores if location filtering was applied
+    if location_keywords:
+        # Strict location filtering - only return jobs that match the location
+        relevant_jobs = [job for score, job in filtered_jobs if score > 0][:MAX_GPT_CONTEXT_RESULTS]
+    elif tech_keywords:
+        # Tech filtering - return jobs with positive scores
+        relevant_jobs = [job for score, job in filtered_jobs if score > 0][:MAX_GPT_CONTEXT_RESULTS]
+    else:
+        # No specific filters - use FAISS similarity results
+        relevant_jobs = candidate_jobs[:MAX_GPT_CONTEXT_RESULTS]
     
     # 🚀 Fast mode: return results without GPT processing
     if return_all:
         return {
-            "answer": None,
+            "answer": f"Found {len(relevant_jobs)} jobs matching your criteria." if relevant_jobs else "No jobs found matching your criteria.",
             "jobs": relevant_jobs,
             "total_matches": len(relevant_jobs),
             "mode": "fast"
@@ -130,12 +188,14 @@ async def chat(request: Request):
 
     # 🧠 Build rich context from retrieved metadata
     relevant_chunks = "\n\n".join([
+        f"Job {idx + 1}/{len(relevant_jobs)}:\n"
         f"**{job.get('title', 'Unknown')}** at {job.get('company', 'Unknown')}\n"
         f"💰 Salary: {job.get('salary', 'Not specified')}\n"
         f"📍 Location: {job.get('location', 'Not specified')}\n"
         f"🛠️ Tech Stack: {', '.join(job.get('tech_stack', []))}\n"
+        f"🔗 Link: {job.get('link', 'N/A')}\n"
         f"📝 Description: {job.get('description', '')[:200]}..."
-        for job in relevant_jobs
+        for idx, job in enumerate(relevant_jobs)
     ])
     
     # Add user memory context if provided
@@ -144,26 +204,37 @@ async def chat(request: Request):
         memory_context = f"\n\nUser Profile/Preferences:\n{user_memory}\n"
 
     # 💬 Create GPT messages with context
+    job_count = len(relevant_jobs)
     messages = [
         {
             "role": "system",
             "content": f"You are a helpful job assistant with access to {total_jobs} job listings. "
-                      f"Provide personalized, helpful recommendations based on the user's query."
+                      f"IMPORTANT: When presenting job results, you MUST mention ALL jobs that are provided to you. "
+                      f"If there are 5 jobs, describe all 5. If there are 10, describe all 10. Do not cherry-pick. "
+                      f"Users expect to see details about every job shown in the table below your response. "
+                      f"Provide personalized, helpful recommendations based on the user's query. "
+                      f"If NO jobs match the user's requirements (especially location), clearly state "
+                      f"that there are 0 matching positions and explain why. Suggest alternatives or "
+                      f"broader search terms."
         },
         {
             "role": "user",
             "content": f"""
 User Query: {user_input}
 {memory_context}
-Below are the most relevant job positions based on the query:
+{'Below are ALL ' + str(job_count) + ' job positions that match the query:' if relevant_jobs else 'No jobs found matching the criteria.'}
 
-{relevant_chunks}
+{relevant_chunks if relevant_jobs else 'The job database does not contain positions matching the specified requirements (particularly location requirements).'}
 
-Please analyze these jobs and provide a helpful response:
-- Summarize the most relevant matches
-- Highlight key details (salary, tech stack, company)
-- Make recommendations based on the user's query
-- Be concise but informative
+CRITICAL: You must analyze and mention ALL {job_count} jobs provided above. Do not skip any.
+
+Please provide a comprehensive response:
+{f"- List and describe ALL {job_count} jobs (do not skip any)" if relevant_jobs else "- Clearly state that 0 jobs were found"}
+- For each job, include: title, company, salary, location, and key tech stack items
+- Rank them by relevance to the user's query
+- Highlight which jobs best match the user's requirements
+- If fewer than 5 jobs found, explain why
+- Be thorough - users will see a table below with all jobs, so your description should match
 """
         }
     ]
@@ -172,140 +243,20 @@ Please analyze these jobs and provide a helpful response:
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
+        temperature=0.3,  # Lower temperature for more consistent, complete responses
     )
+    
+    gpt_answer = response.choices[0].message.content
+    
+    # Add a note if GPT seems to have skipped jobs (basic check)
+    if job_count > 2 and gpt_answer.count('**') < job_count:
+        gpt_answer += f"\n\n*Note: All {job_count} matching positions are shown in the table below.*"
 
     return {
-        "answer": response.choices[0].message.content,
+        "answer": gpt_answer,
         "jobs": relevant_jobs,  # Also return raw job data
         "total_matches": len(relevant_jobs),
         "mode": "gpt"
-    }
-
-@app.post("/agent-chat")
-async def agent_chat(request: Request):
-    """
-    🤖 AGENTIC RAG ENDPOINT - The Smart Job Search
-    
-    This endpoint uses the JobAgent to intelligently search for jobs:
-    - Analyzes the query to extract filters (salary, location, skills, etc.)
-    - Uses multiple tools in sequence (vector search + filters)
-    - Returns more precise results than basic RAG
-    
-    Example queries:
-    - "Find Python jobs in London paying over £60k"
-    - "Show me remote React developer positions with visa sponsorship"
-    - "Machine learning jobs in Manchester between £70k and £90k"
-    """
-    data = await request.json()
-    user_input = data["message"]
-    user_memory = data.get("user_memory", "")
-    use_gpt = data.get("use_gpt", True)  # Whether to use GPT for final response
-    
-    # Import the agent (we'll do this here to avoid circular imports)
-    from chatgpt_clone.rag.job_agent import JobAgent
-    
-    # Create agent instance
-    agent = JobAgent(faiss_index, metadata)
-    
-    # 🧠 Agent does its magic - multi-step search with intelligent filtering
-    print(f"\n{'='*60}")
-    print(f"🤖 AGENTIC RAG SEARCH STARTED")
-    print(f"{'='*60}")
-    
-    agent_results = agent.search(user_input, top_k=20)
-    
-    print(f"{'='*60}")
-    print(f"✅ AGENT SEARCH COMPLETE")
-    print(f"{'='*60}\n")
-    
-    jobs = agent_results["jobs"]
-    parsed_query = agent_results["parsed_query"]
-    
-    # If no GPT needed, return results directly
-    if not use_gpt:
-        return {
-            "answer": None,
-            "jobs": jobs,
-            "total_matches": len(jobs),
-            "parsed_query": parsed_query,
-            "mode": "agent_fast"
-        }
-    
-    # 💬 Use GPT to create a nice summary
-    if len(jobs) == 0:
-        return {
-            "answer": "I couldn't find any jobs matching your criteria. Try broadening your search parameters.",
-            "jobs": [],
-            "total_matches": 0,
-            "parsed_query": parsed_query,
-            "mode": "agent_gpt"
-        }
-    
-    # Build context for GPT
-    relevant_chunks = "\n\n".join([
-        f"**{job.get('title', 'Unknown')}** at {job.get('company', 'Unknown')}\n"
-        f"💰 Salary: {job.get('salary', 'Not specified')}\n"
-        f"📍 Location: {job.get('location', 'Not specified')}\n"
-        f"🛠️ Tech Stack: {', '.join(job.get('tech_stack', []))}\n"
-        f"🛂 Visa: {job.get('visa_sponsorship', 'Not specified')}\n"
-        f"📝 Description: {job.get('description', '')[:150]}..."
-        for job in jobs[:10]  # Only send top 10 to GPT to save tokens
-    ])
-    
-    # Add user memory context
-    memory_context = ""
-    if user_memory:
-        memory_context = f"\n\nUser Profile/Preferences:\n{user_memory}\n"
-    
-    # Create GPT messages
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a helpful job assistant using AGENTIC RAG - an advanced system that "
-                "intelligently filters and ranks jobs. The jobs below have already been filtered "
-                "by an AI agent using multiple criteria. Your job is to summarize and present them clearly."
-            )
-        },
-        {
-            "role": "user",
-            "content": f"""
-User Query: {user_input}
-
-The agent has analyzed this query and found:
-- Skills needed: {', '.join(parsed_query['skills']) if parsed_query['skills'] else 'None specified'}
-- Min Salary: £{parsed_query['salary_min']:,} if parsed_query['salary_min'] else 'Not specified'
-- Location: {parsed_query['location'] or 'Any'}
-- Visa Required: {'Yes' if parsed_query['visa_required'] else 'No'}
-- Remote: {'Yes' if parsed_query['remote'] else 'No'}
-
-{memory_context}
-
-Below are the top matching jobs after intelligent filtering:
-
-{relevant_chunks}
-
-Please provide a helpful summary:
-1. Brief overview of the results
-2. Highlight top 3-5 recommendations
-3. Mention key patterns (average salary, common locations, etc.)
-4. Be concise but informative
-"""
-        }
-    ]
-    
-    # Call GPT
-    response = openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-    )
-    
-    return {
-        "answer": response.choices[0].message.content,
-        "jobs": jobs,
-        "total_matches": len(jobs),
-        "parsed_query": parsed_query,
-        "mode": "agent_gpt"
     }
 
 @app.post("/user/profile")
@@ -350,10 +301,5 @@ async def get_stats():
         "total_jobs": len(metadata),
         "total_users": len(user_profiles),
         "cache_size": cached_search.cache_info()._asdict() if hasattr(cached_search, 'cache_info') else {},
-        "max_gpt_results": MAX_GPT_CONTEXT_RESULTS,
-        "endpoints": {
-            "/chat": "Basic RAG (original)",
-            "/agent-chat": "Agentic RAG (improved)",
-            "/jobs": "Browse all jobs"
-        }
+        "max_gpt_results": MAX_GPT_CONTEXT_RESULTS
     }

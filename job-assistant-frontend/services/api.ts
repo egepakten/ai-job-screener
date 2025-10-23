@@ -19,6 +19,7 @@ export interface ChatRequest {
   session_id?: string;
   user_memory?: string;
   return_all?: boolean;
+  use_gpt?: boolean; // ✅ NEW: For fast mode
 }
 
 export interface Job {
@@ -33,20 +34,22 @@ export interface Job {
   full_description?: string;
 }
 
+// ✅ NEW: Parsed query structure from agent
 export interface ParsedQuery {
   skills: string[];
-  salary_min?: number;
-  location?: string;
-  visa_required?: boolean;
-  remote?: boolean;
+  salary_min: number | null;
+  salary_max: number | null;
+  location: string | null;
+  visa_required: boolean;
+  remote: boolean;
 }
 
 export interface ChatResponse {
   answer: string;
   jobs: Job[];
   total_matches: number;
-  mode: "gpt" | "fast";
-  parsed_query?: ParsedQuery;
+  parsed_query?: ParsedQuery; // ✅ NEW: Agent's parsed query
+  mode: "gpt" | "fast" | "agent_gpt" | "agent_fast"; // ✅ UPDATED: New modes
 }
 
 export interface JobsResponse {
@@ -64,9 +67,12 @@ export interface SystemStats {
   total_users: number;
   cache_size: object;
   max_gpt_results: number;
+  endpoints?: {
+    [key: string]: string;
+  };
 }
 
-// ✅ NEW: Browse/Search Jobs API (No GPT, free & fast)
+// ✅ Browse/Search Jobs API (No GPT, free & fast)
 export const jobsAPI = {
   // Browse all jobs with pagination
   browseJobs: async (
@@ -113,10 +119,35 @@ export const jobsAPI = {
   },
 };
 
-// ✅ UPDATED: Chat API with new features
+// ✅ UPDATED: Chat API with new agent-chat endpoint
 export const chatAPI = {
-  // Smart search with GPT
+  // ⭐ NEW: Agentic RAG endpoint (recommended)
   sendMessage: async (
+    message: string,
+    options?: {
+      sessionId?: string;
+      userMemory?: string;
+      fastMode?: boolean;
+      useGpt?: boolean;
+    }
+  ): Promise<ChatResponse> => {
+    try {
+      // ✅ Use /agent-chat endpoint (new intelligent system)
+      const response = await api.post<ChatResponse>("/agent-chat", {
+        message,
+        session_id: options?.sessionId,
+        user_memory: options?.userMemory,
+        use_gpt: options?.useGpt !== false, // Default: true
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error sending message:", error);
+      throw error;
+    }
+  },
+
+  // Old RAG endpoint (for comparison/fallback)
+  sendMessageOld: async (
     message: string,
     options?: {
       sessionId?: string;
