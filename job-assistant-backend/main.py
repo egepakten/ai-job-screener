@@ -1,8 +1,8 @@
-# chatgpt_clone/main.py
+# main.py
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from chatgpt_clone.rag.retriever import load_faiss_index
-from chatgpt_clone.rag.embedder import embed_text
+from rag.retriever import load_faiss_index
+from rag.embedder import embed_text
 import numpy as np
 import openai
 import os
